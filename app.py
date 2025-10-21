@@ -18,9 +18,13 @@ c.execute('''CREATE TABLE IF NOT EXISTS users (email TEXT PRIMARY KEY, password 
 c.execute('''CREATE TABLE IF NOT EXISTS queries (id TEXT PRIMARY KEY, rm_email TEXT, customer_name TEXT, mobile TEXT, query_type TEXT, notes TEXT, raised_time TEXT, solved_time TEXT, deo_email TEXT, comment TEXT, attachment BLOB, status TEXT)''')
 conn.commit()
 
-# Hash Passwords
-hasher = stauth.Hasher(['@ppLe#1B$'])
-hashed_password = hasher.hash('@ppLe#1B$')  # Master Admin password
+# Hash Passwords (Using stable method for version 0.2.1)
+try:
+    hasher = stauth.Hasher(['Clear#2025!'])  # New password
+    hashed_password = hasher.hashed_passwords[0]  # Access first hashed password
+except Exception as e:
+    st.error(f"Error hashing password: {e}")
+    st.stop()
 
 # Add Master Admin if not exists
 c.execute("SELECT * FROM users WHERE email=?", ('contact@cleardeals.co.in',))
@@ -35,10 +39,15 @@ credentials = {
 users = c.execute("SELECT email, password, name FROM users").fetchall()
 for email, pw, name in users:
     credentials['usernames'][email] = {'name': name, 'password': pw}
-authenticator = stauth.Authenticate(credentials, 'cleardeals', 'key', cookie_expiry_days=30)
+authenticator = stauth.Authenticate(
+    credentials=credentials,
+    cookie_name='cleardeals',
+    cookie_key='key',
+    cookie_expiry_days=30
+)
 
-# Google Calendar Setup (Replace with your credentials file)
-GOOGLE_CREDENTIALS_FILE = 'credentials.json'  # Upload this file to your app folder
+# Google Calendar Setup
+GOOGLE_CREDENTIALS_FILE = 'credentials.json'
 
 def get_google_calendar_service():
     scopes = ['https://www.googleapis.com/auth/calendar']
@@ -55,13 +64,9 @@ def get_google_calendar_service():
             token.write(creds.to_json())
     return build('calendar', 'v3', credentials=creds)
 
-# Send Email (Placeholder, replace with smtplib for real email)
+# Send Email (Placeholder)
 def send_email(to, subject, body):
-    st.write(f"Email sent to {to}: {subject} - {body}")  # Replace with actual send later
-
-# Send WhatsApp (Disabled for now)
-# def send_whatsapp(to, body):
-#     st.write("WhatsApp skipped for now")  # Twilio removed
+    st.write(f"Email sent to {to}: {subject} - {body}")
 
 # Generate Query ID
 def generate_query_id(mobile):
@@ -80,7 +85,7 @@ def filter_by_date(df, option):
         return df[df['raised_time'].dt.date == today - timedelta(days=1)]
     elif option == 'Last 7 Days':
         return df[df['raised_time'].dt.date >= today - timedelta(days=7)]
-    return df  # Custom handled separately
+    return df
 
 # Main App
 st.title("Cleardeals Ticketing System")
@@ -108,7 +113,8 @@ if not st.session_state.get('authenticated', False):
     signup_role = st.selectbox("Role", ['rm', 'deo'])
     signup_name = st.text_input("Name")
     if st.button("Sign Up"):
-        hashed_pw = stauth.Hasher([signup_pw]).hash(signup_pw)[0]
+        hasher = stauth.Hasher([signup_pw])
+        hashed_pw = hasher.hashed_passwords[0]
         c.execute("INSERT OR IGNORE INTO users VALUES (?, ?, ?, ?, ?)", (signup_email, hashed_pw, signup_role, signup_name, 'pending'))
         conn.commit()
         st.success("Signup requested. Wait for Admin approval.")
@@ -116,7 +122,7 @@ if not st.session_state.get('authenticated', False):
 
     # Login Form
     if st.session_state.role:
-        name, authentication_status, username = authenticator.login('Login', 'main')
+        name, authentication_status, username = authenticator.login(fields={'Form name': 'Login', 'Username': 'Email', 'Password': 'Password', 'Login': 'Login'})
         if authentication_status:
             st.session_state.authenticated = True
             st.session_state.email = username
@@ -127,9 +133,9 @@ if not st.session_state.get('authenticated', False):
             else:
                 st.success(f"Welcome {name}")
         elif authentication_status == False:
-            st.error('Username/password is incorrect')
+            st.error('Email/password is incorrect')
         elif authentication_status is None:
-            st.warning('Please enter your username and password')
+            st.warning('Please enter your email and password')
 
 else:
     role = st.session_state.role
@@ -171,7 +177,7 @@ else:
                 start = st.date_input("Start")
                 end = st.date_input("End")
                 filtered = filtered[(filtered['raised_time'].dt.date >= start) & (filtered['raised_time'].dt.date <= end)]
-            st.dataframe(filtered[['id', 'customer_name', 'mobile', 'query_type']])  # Add column filters later with aggrid if needed
+            st.dataframe(filtered[['id', 'customer_name', 'mobile', 'query_type']])
 
             if st.button("Raise Query"):
                 with st.form("Raise Query Form"):
@@ -190,9 +196,7 @@ else:
                                   (qid, email, cust_name, mobile, query_type, notes, raised_time, None, None, None, attachment_data, 'raised'))
                         conn.commit()
                         st.success(f"Query submitted: {qid}")
-                        # Integrations
                         send_email(email, "Query Raised", f"ID: {qid}")
-                        # send_whatsapp(mobile, f"Query {qid} raised")  # Skipped
                         service = get_google_calendar_service()
                         event = {'summary': f"Query {qid}", 'start': {'dateTime': raised_time}, 'end': {'dateTime': raised_time}}
                         service.events().insert(calendarId='primary', body=event).execute()
@@ -249,12 +253,10 @@ else:
                 comment = st.text_area("Add Comment")
                 if st.button("Solve"):
                     solved_time = datetime.now().isoformat()
-                    solved_str = datetime.now().strftime('%d%m%y-%H%M')
                     c.execute("UPDATE queries SET solved_time=?, comment=?, status='solved' WHERE id=?", (solved_time, comment, view_id))
                     conn.commit()
                     st.success("Solved")
                     send_email(query['rm_email'], "Query Solved", f"ID: {view_id} - {comment}")
-                    # send_whatsapp(query['mobile'], f"Query {view_id} solved")  # Skipped
 
         elif page == 'Solved Queries':
             st.subheader("Solved Queries")
@@ -332,7 +334,8 @@ else:
                     status = st.selectbox("Status", ['active', 'deactive', 'pending'])
                     if st.button("Update"):
                         if new_pw:
-                            hashed = stauth.Hasher([new_pw]).hash(new_pw)[0]
+                            hasher = stauth.Hasher([new_pw])
+                            hashed = hasher.hashed_passwords[0]
                             c.execute("UPDATE users SET password=?, status=? WHERE email=?", (hashed, status, edit_email))
                         else:
                             c.execute("UPDATE users SET status=? WHERE email=?", (status, edit_email))
@@ -348,7 +351,8 @@ else:
                     status = st.selectbox("Status", ['active', 'deactive', 'pending'])
                     if st.button("Update"):
                         if new_pw:
-                            hashed = stauth.Hasher([new_pw]).hash(new_pw)[0]
+                            hasher = stauth.Hasher([new_pw])
+                            hashed = hasher.hashed_passwords[0]
                             c.execute("UPDATE users SET password=?, status=? WHERE email=?", (hashed, status, edit_email))
                         else:
                             c.execute("UPDATE users SET status=? WHERE email=?", (status, edit_email))
