@@ -4,10 +4,19 @@ import pandas as pd
 import sqlite3
 from datetime import datetime, timedelta
 import os
+import json
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
 from google_auth_oauthlib.flow import InstalledAppFlow
+
+# Custom CSS for Cleardeals Branding
+st.markdown("""
+<style>
+body { background-color: #f0f8ff; }
+.stButton>button { background-color: #28a745; color: white; }
+</style>
+""", unsafe_allow_html=True)
 
 # Database Setup
 conn = sqlite3.connect('cleardeals.db', check_same_thread=False)
@@ -18,10 +27,18 @@ c.execute('''CREATE TABLE IF NOT EXISTS users (email TEXT PRIMARY KEY, password 
 c.execute('''CREATE TABLE IF NOT EXISTS queries (id TEXT PRIMARY KEY, rm_email TEXT, customer_name TEXT, mobile TEXT, query_type TEXT, notes TEXT, raised_time TEXT, solved_time TEXT, deo_email TEXT, comment TEXT, attachment BLOB, status TEXT)''')
 conn.commit()
 
-# Hash Passwords (Using stable method for version 0.2.1)
+# Handle Google Credentials from Environment Variable
+GOOGLE_CREDENTIALS_FILE = '/tmp/credentials.json'
+if 'GOOGLE_CREDENTIALS_JSON' in os.environ:
+    with open(GOOGLE_CREDENTIALS_FILE, 'w') as f:
+        json.dump(json.loads(os.environ['GOOGLE_CREDENTIALS_JSON']), f)
+else:
+    GOOGLE_CREDENTIALS_FILE = 'credentials.json'
+
+# Hash Passwords (Compatible with streamlit-authenticator==0.2.1)
 try:
-    hasher = stauth.Hasher(['Clear#2025!'])  # New password
-    hashed_password = hasher.hashed_passwords[0]  # Access first hashed password
+    hasher = stauth.Hasher(['Clear#2025!'])  # Master Admin password
+    hashed_password = hasher.generate()[0]  # Use generate() for version 0.2.1
 except Exception as e:
     st.error(f"Error hashing password: {e}")
     st.stop()
@@ -42,13 +59,11 @@ for email, pw, name in users:
 authenticator = stauth.Authenticate(
     credentials=credentials,
     cookie_name='cleardeals',
-    cookie_key='key',
+    key='key',
     cookie_expiry_days=30
 )
 
 # Google Calendar Setup
-GOOGLE_CREDENTIALS_FILE = 'credentials.json'
-
 def get_google_calendar_service():
     scopes = ['https://www.googleapis.com/auth/calendar']
     creds = None
@@ -114,7 +129,7 @@ if not st.session_state.get('authenticated', False):
     signup_name = st.text_input("Name")
     if st.button("Sign Up"):
         hasher = stauth.Hasher([signup_pw])
-        hashed_pw = hasher.hashed_passwords[0]
+        hashed_pw = hasher.generate()[0]
         c.execute("INSERT OR IGNORE INTO users VALUES (?, ?, ?, ?, ?)", (signup_email, hashed_pw, signup_role, signup_name, 'pending'))
         conn.commit()
         st.success("Signup requested. Wait for Admin approval.")
@@ -122,7 +137,7 @@ if not st.session_state.get('authenticated', False):
 
     # Login Form
     if st.session_state.role:
-        name, authentication_status, username = authenticator.login(fields={'Form name': 'Login', 'Username': 'Email', 'Password': 'Password', 'Login': 'Login'})
+        name, authentication_status, username = authenticator.login('Login', 'main')
         if authentication_status:
             st.session_state.authenticated = True
             st.session_state.email = username
@@ -335,7 +350,7 @@ else:
                     if st.button("Update"):
                         if new_pw:
                             hasher = stauth.Hasher([new_pw])
-                            hashed = hasher.hashed_passwords[0]
+                            hashed = hasher.generate()[0]
                             c.execute("UPDATE users SET password=?, status=? WHERE email=?", (hashed, status, edit_email))
                         else:
                             c.execute("UPDATE users SET status=? WHERE email=?", (status, edit_email))
@@ -352,7 +367,7 @@ else:
                     if st.button("Update"):
                         if new_pw:
                             hasher = stauth.Hasher([new_pw])
-                            hashed = hasher.hashed_passwords[0]
+                            hashed = hasher.generate()[0]
                             c.execute("UPDATE users SET password=?, status=? WHERE email=?", (hashed, status, edit_email))
                         else:
                             c.execute("UPDATE users SET status=? WHERE email=?", (status, edit_email))
